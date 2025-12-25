@@ -44,7 +44,12 @@ mastering-copilot analyze input.wav --profile spotify --profile netease
 
 ## Development Status
 
-This project is in active development. See [Plan.md](Plan.md) for the implementation roadmap.
+- [x] Create skeleton CLI with Typer (Milestone 1)
+- [x] Add loudness metrics with pyloudnorm (Milestone 2)
+- [x] Implement peaks and true peak approximation (Milestone 3)
+- [x] Add profiles configuration and normalization simulation (Milestone 4)
+- [] Implement segmentation and worst sections analysis (Milestone 5)
+- [] Add mastering suggestions functionality (Milestone 6)
 
 ## License
 
