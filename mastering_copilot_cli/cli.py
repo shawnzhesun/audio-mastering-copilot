@@ -66,10 +66,11 @@ def analyze(
         help="Audio file to analyze",
     ),
     profile: Optional[List[str]] = typer.Option(
-        None,
+        ['spotify', 'apple_music', 'netease'],
         "--profile",
         "-p",
-        help="Platform normalization profile (e.g., spotify, netease)",
+        help="Platform normalization profile (e.g., spotify, netease). Defaults to Spotify, Apple Music and Netease",
+        case_sensitive=False,
     ),
     target_lufs: Optional[float] = typer.Option(
         None,
@@ -158,6 +159,8 @@ def analyze(
     if profile:
         # Get requested profiles
         profiles_to_check = []
+        if 'all' in profile:
+            profile = list(get_profile_names())
         for prof_name in profile:
             prof = get_profile(prof_name)
             if prof:

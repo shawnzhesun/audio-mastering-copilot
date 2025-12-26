@@ -1,6 +1,6 @@
 """Vertical bar chart visualization for section analysis."""
 
-from typing import List, Tuple, Optional
+from typing import List, Dict
 import numpy as np
 from rich.console import Console
 from rich.text import Text
@@ -118,26 +118,34 @@ def create_section_bars_with_overlay(
     rows = create_vertical_bars(lufs_values, min_lufs, max_lufs, height, bar_width)
 
     # Add platform treatment overlay (colored indicators on bars)
-    # Add a row at bottom for platform action indicators
+    # Show how each section ends up AFTER normalization relative to target
     indicator_row = []
     for result in platform_results:
         action_type = result.action.action_type
+        resulting_lufs = result.resulting_lufs  # LUFS after platform normalization
+        target_lufs = result.target_lufs
 
-        if action_type == "reduce":
-            indicator = "⌄"  # Down arrow - volume reduced
-            color = "cyan"
-        elif action_type == "boost":
-            indicator = "⌃"  # Up arrow - volume boosted
-            color = "yellow"
-        elif action_type == "limit":
-            indicator = "≈"  # Limited
-            color = "red"
-        elif action_type == "clip_risk":
-            indicator = "!"  # Clipping risk
-            color = "red bold"
+        # Calculate difference between resulting loudness and target
+        diff = resulting_lufs - target_lufs
+
+        if action_type == "clip_risk" or result.resulting_peak_db > result.target_peak_db:
+            # Section will clip or exceed true peak limit
+            indicator = "!"
+        elif diff > 3.0:
+            # Section ends up significantly above target (still too hot)
+            indicator = "⚠"
+        elif diff > 1.0:
+            # Section ends up slightly above target (acceptable)
+            indicator = "⌃"
+        elif diff < -4.0:
+            # Section ends up way below target (buried in mix)
+            indicator = "⇣"
+        elif diff < -1.5:
+            # Section ends up below target (noticeable)
+            indicator = "⌄"
         else:
-            indicator = "·"  # No change
-            color = "dim"
+            # Section is close to target (within ±1.5 dB - good!)
+            indicator = "·"
 
         # Center the indicator in the bar width
         padding = (bar_width - 1) // 2
@@ -147,101 +155,15 @@ def create_section_bars_with_overlay(
     return rows, "".join(indicator_row)
 
 
-def render_platform_section_chart(
-    console: Console,
-    sections: List[Section],
-    platform_results: List[SectionNormalization],
-    platform_name: str,
-    max_sections: int = 40,
-) -> None:
-    """Render a complete platform section analysis chart.
-
-    Args:
-        console: Rich console
-        sections: List of sections
-        platform_results: Platform normalization results
-        platform_name: Name of platform
-        max_sections: Maximum number of sections to display
-    """
-    # Subsample if too many sections
-    if len(sections) > max_sections:
-        step = len(sections) // max_sections
-        sections = sections[::step]
-        platform_results = platform_results[::step]
-
-    # Create chart
-    chart_rows, indicator_row = create_section_bars_with_overlay(
-        sections, platform_results, height=10, bar_width=2
-    )
-
-    # Build text output
-    text = Text()
-    text.append(f"{platform_name} Normalization\n", style="bold cyan")
-    text.append("Timeline (each bar = ~3s section)\n\n", style="dim")
-
-    # Add chart rows
-    for row in chart_rows:
-        text.append(row + "\n", style="white")
-
-    # Add indicator row with colors
-    for i, result in enumerate(platform_results):
-        action_type = result.action.action_type
-
-        if action_type == "reduce":
-            style = "cyan"
-        elif action_type == "boost":
-            style = "yellow"
-        elif action_type == "limit":
-            style = "red"
-        elif action_type == "clip_risk":
-            style = "red bold"
-        else:
-            style = "dim"
-
-        # Get the indicator character
-        indicator_str = indicator_row[i * 2: (i + 1) * 2]
-        text.append(indicator_str, style=style)
-
-    text.append("\n\n", style="")
-
-    # Add LUFS labels
-    lufs_values = [s.integrated_lufs if not np.isinf(s.integrated_lufs) else -60 for s in sections]
-
-    # Show every nth value to avoid clutter
-    label_row = []
-    show_every = max(1, len(sections) // 10)
-
-    for i, lufs in enumerate(lufs_values):
-        if i % show_every == 0:
-            label = f"{lufs:.0f}"
-        else:
-            label = ""
-
-        # Pad to bar width
-        padded = label.center(2)
-        label_row.append(padded)
-
-    text.append("".join(label_row), style="dim")
-
-    # Add legend
-    text.append("\n\n", style="")
-    text.append("⌄ Reduced  ", style="cyan")
-    text.append("⌃ Boosted  ", style="yellow")
-    text.append("≈ Limited  ", style="red")
-    text.append("· No change", style="dim")
-
-    panel = Panel(text, border_style="blue", box=box.ROUNDED)
-    console.print(panel)
-    console.print()
-
-
 def render_multi_platform_comparison(
     console: Console,
     sections: List[Section],
-    platform_results_dict: dict,
+    platform_results_dict: Dict[str, List[SectionNormalization]],
     max_sections: int = 40,
 ) -> None:
     """Render comparison of multiple platforms side-by-side.
+
+    Shows platforms as columns, with each platform's histogram displayed horizontally.
 
     Args:
         console: Rich console
@@ -257,63 +179,197 @@ def render_multi_platform_comparison(
             name: results[::step] for name, results in platform_results_dict.items()
         }
 
-    # Get LUFS values for x-axis labels (shared across platforms)
-    lufs_values = [s.integrated_lufs if not np.isinf(s.integrated_lufs) else -60 for s in sections]
+    platforms = list(platform_results_dict.items())
+    num_sections = len(sections)
+    num_platforms = len(platforms)
 
-    text = Text()
-    text.append("Platform Normalization Comparison\n", style="bold cyan")
-    text.append("Each column = ~3s section of your track\n\n", style="dim")
+    if num_platforms == 0 or num_sections == 0:
+        return
 
-    # Render each platform
-    for platform_name, results in platform_results_dict.items():
-        # Platform name
-        text.append(f"\n{platform_name}\n", style="bold yellow")
+    # Chart dimensions
+    chart_height = 12  # Height in character rows
+    # Allocate width per platform column
+    total_width = console.width - 10  # Leave margin for panel
+    platform_width = max(20, total_width // num_platforms - 2)  # Spacing between platforms
+    bar_width = max(1, platform_width // num_sections)
 
-        # Create bars
-        chart_rows, indicator_row = create_section_bars_with_overlay(
-            sections, results, height=8, bar_width=2
+    # LUFS range for visualization
+    min_lufs = -25.0
+    max_lufs = -5.0
+
+    # Generate histograms for all platforms
+    platform_data = []
+    for platform_name, results in platforms:
+        target_lufs = results[0].target_lufs
+        resulting_lufs_values = [r.resulting_lufs for r in results]
+
+        histogram_rows = _create_horizontal_histogram(
+            resulting_lufs_values,
+            target_lufs,
+            min_lufs,
+            max_lufs,
+            chart_height,
+            bar_width,
         )
 
-        # Add chart
-        for row in chart_rows:
-            text.append(row + "\n", style="white")
-
-        # Add colored indicators
-        for i, result in enumerate(results):
+        # Generate indicator row
+        indicator_parts = []
+        for result in results:
+            diff = result.resulting_lufs - result.target_lufs
             action_type = result.action.action_type
 
-            if action_type == "reduce":
-                style = "cyan"
-            elif action_type == "boost":
-                style = "yellow"
-            elif action_type == "limit":
-                style = "red"
-            elif action_type == "clip_risk":
-                style = "red bold"
+            if action_type == "clip_risk" or result.resulting_peak_db > result.target_peak_db:
+                indicator = "!"
+                indicator_style = "red bold"
+            elif diff > 3.0:
+                indicator = "⚠"
+                indicator_style = "red"
+            elif diff > 1.0:
+                indicator = "⌃"
+                indicator_style = "yellow"
+            elif diff < -4.0:
+                indicator = "⇣"
+                indicator_style = "magenta"
+            elif diff < -1.5:
+                indicator = "⌄"
+                indicator_style = "yellow"
             else:
-                style = "dim"
+                indicator = "·"
+                indicator_style = "green"
 
-            indicator_str = indicator_row[i * 2: (i + 1) * 2]
-            text.append(indicator_str, style=style)
+            indicator_parts.append((indicator * bar_width, indicator_style))
 
-        text.append("\n", style="")
+        platform_data.append({
+            "name": platform_name,
+            "target": target_lufs,
+            "histogram": histogram_rows,
+            "indicators": indicator_parts,
+        })
 
-    # Add shared LUFS labels at bottom
-    text.append("\nLUFS: ", style="dim")
-    show_every = max(1, len(sections) // 10)
-    for i, lufs in enumerate(lufs_values):
-        if i % show_every == 0:
-            text.append(f"{lufs:.0f}".center(2), style="dim")
-        else:
-            text.append("  ", style="dim")
+    # Build the side-by-side display
+    text = Text()
+    text.append("Platform Normalization Comparison\n", style="bold cyan")
+    text.append(f"Timeline: {num_sections} sections × ~3s each\n\n", style="dim")
+
+    # Platform headers (with space for LUFS labels on left)
+    text.append("     ", style="")  # Space for LUFS labels
+    hide_target = len(platform_data) > 3
+    for i, data in enumerate(platform_data):
+        data_width = len(data["histogram"][0])
+        header_width = len(data["name"])
+        if not hide_target:
+            header_width += len(f" ({data['target']:.1f})")
+        text.append(data["name"], style="bold yellow")
+        if not hide_target:
+            text.append(f" ({data['target']:.1f})", style="dim")
+        text.append(" " * (data_width - header_width), style="")
+        if i < len(platform_data) - 1:
+            text.append("  │  ", style="dim")
+    text.append("\n")
+
+    # Histogram rows (side by side with LUFS labels on left)
+    for row_idx in range(chart_height):
+        # Calculate LUFS value for this row
+        lufs_at_row = max_lufs - (row_idx * (max_lufs - min_lufs) / chart_height)
+
+        # Add LUFS label on the left (right-aligned in 4 chars)
+        text.append(f"{lufs_at_row:>4.0f} ", style="dim")
+
+        for i, data in enumerate(platform_data):
+            text.append(data["histogram"][row_idx], style="white")
+            if i < len(platform_data) - 1:
+                text.append("  │  ", style="dim")
+        text.append("\n")
+
+    # Indicator rows (side by side)
+    text.append("     ", style="")  # Space to align with LUFS labels
+    for i, data in enumerate(platform_data):
+        for indicator_str, indicator_style in data["indicators"]:
+            text.append(indicator_str, style=indicator_style)
+        if i < len(platform_data) - 1:
+            text.append("  │  ", style="dim")
+    text.append("\n\n")
+
+    # LUFS scale
+    text.append("LUFS Scale: ", style="dim")
+    text.append(f"{max_lufs:.0f} ", style="red")
+    text.append("(loud) ... ", style="dim")
+    text.append(f"{(max_lufs+min_lufs)/2:.0f} ", style="yellow")
+    text.append("... ", style="dim")
+    text.append(f"{min_lufs:.0f}", style="cyan")
+    text.append(" (quiet)\n\n", style="dim")
 
     # Legend
-    text.append("\n\n", style="")
-    text.append("⌄ Reduced  ", style="cyan")
-    text.append("⌃ Boosted  ", style="yellow")
-    text.append("≈ Limited  ", style="red")
-    text.append("· No change", style="dim")
+    text.append("After normalization: ", style="bold dim")
+    text.append("· Near target  ", style="green")
+    text.append("⌃ Above  ", style="yellow")
+    text.append("⌄ Below  ", style="yellow")
+    text.append("⚠ Too hot  ", style="red")
+    text.append("⇣ Buried  ", style="magenta")
+    text.append("! Clip", style="red bold")
 
     panel = Panel(text, border_style="magenta", box=box.ROUNDED)
     console.print(panel)
     console.print()
+
+
+def _create_horizontal_histogram(
+    values: List[float],
+    target_line: float,
+    min_val: float,
+    max_val: float,
+    height: int,
+    bar_width: int,
+) -> List[str]:
+    """Create horizontal histogram with target reference line.
+
+    Args:
+        values: List of LUFS values to plot
+        target_line: Target LUFS to mark on chart
+        min_val: Minimum LUFS for scale
+        max_val: Maximum LUFS for scale
+        height: Chart height in rows
+        bar_width: Width of each bar in characters
+
+    Returns:
+        List of row strings (top to bottom)
+    """
+    if not values:
+        return []
+
+    # Calculate target line position
+    target_norm = (target_line - min_val) / (max_val - min_val)
+    target_row = height - int(target_norm * height)
+
+    rows = []
+    for row_idx in range(height):
+        level_threshold = max_val - (row_idx * (max_val - min_val) / height)
+        row_chars = []
+
+        for val in values:
+            if np.isinf(val) or np.isnan(val):
+                val = min_val
+
+            # Determine what to draw at this position
+            if row_idx == target_row:
+                # Target reference line
+                char = "─"
+                repeat = bar_width
+            elif val >= level_threshold:
+                # Bar extends to this level
+                char = "█"
+                repeat = bar_width
+            elif val >= level_threshold - (max_val - min_val) / height * 0.5:
+                # Partial bar
+                char = "▄"
+                repeat = bar_width
+            else:
+                # Empty space
+                char = " "
+                repeat = bar_width
+
+            row_chars.append(char * repeat)
+
+        rows.append("".join(row_chars))
+
+    return rows

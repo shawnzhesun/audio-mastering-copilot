@@ -26,8 +26,10 @@ class SectionNormalization:
 
     section: Section
     original_lufs: float
+    target_lufs: float
     resulting_lufs: float  # After normalization
     original_peak_db: float
+    target_peak_db: float
     resulting_peak_db: float  # After gain adjustment
     action: NormalizationAction
 
@@ -215,8 +217,10 @@ def _simulate_section(
     return SectionNormalization(
         section=section,
         original_lufs=section.integrated_lufs,
+        target_lufs=profile.target_lufs,
         resulting_lufs=resulting_lufs,
         original_peak_db=section.peak_db,
+        target_peak_db=profile.true_peak_limit,
         resulting_peak_db=resulting_peak_db,
         action=action,
     )
@@ -240,10 +244,9 @@ def _analyze_issues(
         issues.append(f"Platform will apply limiting")
 
     # Check if track is much louder than target
-    if overall_action.action_type == "reduce" and overall_action.gain_db < -3.0:
+    if overall_action.action_type == "reduce":
         issues.append(
-            f"Track is {-overall_action.gain_db:.1f} dB louder than target - "
-            "significant volume reduction"
+            f"Track is {-overall_action.gain_db:.1f} dB louder than target" + (" - significant volume reduction" if overall_action.gain_db < -3.0 else " - volume reduction applied")   
         )
 
     # Check for hot sections

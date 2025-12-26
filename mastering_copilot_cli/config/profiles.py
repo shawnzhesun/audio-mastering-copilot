@@ -93,7 +93,7 @@ BUILTIN_PROFILES: Dict[str, NormalizationProfile] = {
     "netease": NormalizationProfile(
         name="netease",
         display_name="NetEase Cloud Music",
-        target_lufs=-13.0,
+        target_lufs=-11.0,
         true_peak_limit=-1.0,
         applies_normalization=True,
         limiter_on_boost=False,
