@@ -161,9 +161,10 @@ def render_multi_platform_comparison(
     platform_results_dict: Dict[str, List[SectionNormalization]],
     max_sections: int = 40,
 ) -> None:
-    """Render comparison of multiple platforms side-by-side.
+    """Render comparison of multiple platforms as stacked histograms.
 
-    Shows platforms as columns, with each platform's histogram displayed horizontally.
+    Shows section LUFS horizontally across time with platform target reference lines.
+    Each platform is displayed in its own row for better readability.
 
     Args:
         console: Rich console
@@ -181,28 +182,34 @@ def render_multi_platform_comparison(
 
     platforms = list(platform_results_dict.items())
     num_sections = len(sections)
-    num_platforms = len(platforms)
 
-    if num_platforms == 0 or num_sections == 0:
+    if len(platforms) == 0 or num_sections == 0:
         return
 
     # Chart dimensions
     chart_height = 12  # Height in character rows
-    # Allocate width per platform column
-    total_width = console.width - 10  # Leave margin for panel
-    platform_width = max(20, total_width // num_platforms - 2)  # Spacing between platforms
-    bar_width = max(1, platform_width // num_sections)
+    chart_width = min(70, num_sections * 2)  # Width based on sections
+    bar_width = max(1, chart_width // num_sections)
 
     # LUFS range for visualization
     min_lufs = -25.0
     max_lufs = -5.0
 
-    # Generate histograms for all platforms
-    platform_data = []
+    text = Text()
+    text.append("Platform Normalization Comparison\n", style="bold cyan")
+    text.append(f"Timeline: {num_sections} sections × ~3s each\n\n", style="dim")
+
+    # Render each platform
     for platform_name, results in platforms:
+        # Platform header with target
         target_lufs = results[0].target_lufs
+        text.append(f"{platform_name}", style="bold yellow")
+        text.append(f" (target: {target_lufs:.1f} LUFS)\n", style="dim")
+
+        # Get resulting LUFS for each section after normalization
         resulting_lufs_values = [r.resulting_lufs for r in results]
 
+        # Create histogram
         histogram_rows = _create_horizontal_histogram(
             resulting_lufs_values,
             target_lufs,
@@ -212,85 +219,48 @@ def render_multi_platform_comparison(
             bar_width,
         )
 
-        # Generate indicator row
-        indicator_parts = []
+        # Draw histogram with LUFS labels on the left
+        for row_idx, row in enumerate(histogram_rows):
+            # Calculate LUFS value for this row
+            lufs_at_row = max_lufs - (row_idx * (max_lufs - min_lufs) / chart_height)
+
+            # Add LUFS label on the left (right-aligned in 4 chars)
+            text.append(f"{lufs_at_row:>4.0f} ", style="dim")
+            text.append(row + "\n", style="white")
+
+        # Draw indicator row showing status of each section
+        text.append("     ", style="")  # Space to align with LUFS labels
         for result in results:
             diff = result.resulting_lufs - result.target_lufs
             action_type = result.action.action_type
 
+            # Determine indicator
             if action_type == "clip_risk" or result.resulting_peak_db > result.target_peak_db:
                 indicator = "!"
-                indicator_style = "red bold"
+                style = "red bold"
             elif diff > 3.0:
                 indicator = "⚠"
-                indicator_style = "red"
+                style = "red"
             elif diff > 1.0:
                 indicator = "⌃"
-                indicator_style = "yellow"
+                style = "yellow"
             elif diff < -4.0:
                 indicator = "⇣"
-                indicator_style = "magenta"
+                style = "magenta"
             elif diff < -1.5:
                 indicator = "⌄"
-                indicator_style = "yellow"
+                style = "yellow"
             else:
                 indicator = "·"
-                indicator_style = "green"
+                style = "green"
 
-            indicator_parts.append((indicator * bar_width, indicator_style))
+            # Build indicator string with padding
+            ind_str = (indicator * bar_width).ljust(bar_width)
+            text.append(ind_str, style=style)
 
-        platform_data.append({
-            "name": platform_name,
-            "target": target_lufs,
-            "histogram": histogram_rows,
-            "indicators": indicator_parts,
-        })
+        text.append("\n\n")
 
-    # Build the side-by-side display
-    text = Text()
-    text.append("Platform Normalization Comparison\n", style="bold cyan")
-    text.append(f"Timeline: {num_sections} sections × ~3s each\n\n", style="dim")
-
-    # Platform headers (with space for LUFS labels on left)
-    text.append("     ", style="")  # Space for LUFS labels
-    hide_target = len(platform_data) > 3
-    for i, data in enumerate(platform_data):
-        data_width = len(data["histogram"][0])
-        header_width = len(data["name"])
-        if not hide_target:
-            header_width += len(f" ({data['target']:.1f})")
-        text.append(data["name"], style="bold yellow")
-        if not hide_target:
-            text.append(f" ({data['target']:.1f})", style="dim")
-        text.append(" " * (data_width - header_width), style="")
-        if i < len(platform_data) - 1:
-            text.append("  │  ", style="dim")
-    text.append("\n")
-
-    # Histogram rows (side by side with LUFS labels on left)
-    for row_idx in range(chart_height):
-        # Calculate LUFS value for this row
-        lufs_at_row = max_lufs - (row_idx * (max_lufs - min_lufs) / chart_height)
-
-        # Add LUFS label on the left (right-aligned in 4 chars)
-        text.append(f"{lufs_at_row:>4.0f} ", style="dim")
-
-        for i, data in enumerate(platform_data):
-            text.append(data["histogram"][row_idx], style="white")
-            if i < len(platform_data) - 1:
-                text.append("  │  ", style="dim")
-        text.append("\n")
-
-    # Indicator rows (side by side)
-    text.append("     ", style="")  # Space to align with LUFS labels
-    for i, data in enumerate(platform_data):
-        for indicator_str, indicator_style in data["indicators"]:
-            text.append(indicator_str, style=indicator_style)
-        if i < len(platform_data) - 1:
-            text.append("  │  ", style="dim")
-    text.append("\n\n")
-
-    # LUFS scale
+    # Add LUFS scale at bottom
     text.append("LUFS Scale: ", style="dim")
     text.append(f"{max_lufs:.0f} ", style="red")
     text.append("(loud) ... ", style="dim")
