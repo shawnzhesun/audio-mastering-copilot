@@ -204,13 +204,23 @@ def render_multi_platform_comparison(
         # Platform header with target
         target_lufs = results[0].target_lufs
         text.append(f"{platform_name}", style="bold yellow")
-        text.append(f" (target: {target_lufs:.1f} LUFS)\n", style="dim")
+        text.append(f" (target: {target_lufs:.1f} LUFS)\n\n", style="dim")
 
-        # Get resulting LUFS for each section after normalization
+        # Get original and resulting LUFS for each section
+        original_lufs_values = [r.original_lufs for r in results]
         resulting_lufs_values = [r.resulting_lufs for r in results]
 
-        # Create histogram
-        histogram_rows = _create_horizontal_histogram(
+        # Create histograms for both before and after
+        original_histogram_rows = _create_horizontal_histogram(
+            original_lufs_values,
+            target_lufs,
+            min_lufs,
+            max_lufs,
+            chart_height,
+            bar_width,
+        )
+
+        resulting_histogram_rows = _create_horizontal_histogram(
             resulting_lufs_values,
             target_lufs,
             min_lufs,
@@ -219,17 +229,34 @@ def render_multi_platform_comparison(
             bar_width,
         )
 
-        # Draw histogram with LUFS labels on the left
-        for row_idx, row in enumerate(histogram_rows):
+        # Headers for side-by-side charts
+        text.append("     ", style="")  # Space for LUFS labels
+        text.append("Before normalization".ljust(len(original_histogram_rows[0])), style="cyan dim")
+        text.append("  │  ", style="dim")
+        text.append("After normalization", style="cyan dim")
+        text.append("\n")
+
+        # Draw both histograms side by side with LUFS labels
+        for row_idx in range(chart_height):
             # Calculate LUFS value for this row
             lufs_at_row = max_lufs - (row_idx * (max_lufs - min_lufs) / chart_height)
 
             # Add LUFS label on the left (right-aligned in 4 chars)
             text.append(f"{lufs_at_row:>4.0f} ", style="dim")
-            text.append(row + "\n", style="white")
 
-        # Draw indicator row showing status of each section
+            # Before chart
+            text.append(original_histogram_rows[row_idx], style="white")
+            text.append("  │  ", style="dim")
+
+            # After chart
+            text.append(resulting_histogram_rows[row_idx], style="white")
+            text.append("\n")
+
+        # Draw indicator row showing status of each section (only for "after")
         text.append("     ", style="")  # Space to align with LUFS labels
+        text.append(" " * len(original_histogram_rows[0]), style="")  # Space for "before" chart
+        text.append("  │  ", style="dim")
+
         for result in results:
             diff = result.resulting_lufs - result.target_lufs
             action_type = result.action.action_type
